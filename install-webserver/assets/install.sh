@@ -4,7 +4,7 @@
 # source code at https://github.com/espcaa/slack-desktop-experiments
 
 
-SERVER_URL="http://localhost:8080"
+SERVER_URL=""
 
 # detect arch + os
 
@@ -15,4 +15,4 @@ BINARY_NAME="installer-bin-${OS}-${ARCH}"
 echo "downloading installer binary for ${OS}/${ARCH}..."
 curl -sSl "${SERVER_URL}/${BINARY_NAME}" -o /tmp/install-bin
 chmod +x /tmp/install-bin
-/tmp/install-bin
+SERVER_URL=$SERVER_URL /tmp/install-bin

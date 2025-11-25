@@ -13,7 +13,9 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-const web_server_url = "http://localhost:8080"
+var web_server_url = os.Getenv("SERVER_URL")
+
+const slack_download_url = "https://downloads.slack-edge.com/desktop-releases/mac/universal/4.47.65/Slack-4.47.65-macOS.dmg"
 
 // slack modded installer
 // only macos export for now :(
@@ -49,6 +51,14 @@ var errorStyle = lipgloss.NewStyle().
 //---
 
 func main() {
+	if web_server_url == "" {
+		web_server_url = "http://localhost:8080"
+	}
+	// check if first arg is "update"
+	if len(os.Args) > 1 && os.Args[1] == "update" {
+		update()
+		return
+	}
 	fmt.Println(mainTitleStyle.Render("slack plugin thingy installer "))
 
 	// check what os we are os
@@ -58,6 +68,7 @@ func main() {
 	os := runtime.GOOS
 	switch os {
 	case "darwin":
+
 		fmt.Println(successStyle.Render("your os is supported!"))
 		MacOSInstall()
 	default:
@@ -66,24 +77,9 @@ func main() {
 }
 
 func MacOSInstall() {
-	// checking if slack is already installed
-
-	fmt.Println(textStyle.Render("checking if slack is installed..."))
-	installed, installed_path := IsSlackInstalledMacOS()
-	if installed {
-		fmt.Println(successStyle.Render("slack is installed!"))
-	} else {
-		fmt.Println(errorStyle.Render("slack is not installed. please install it!!"))
-		return
-	}
-
-	fmt.Println(textStyle.Render("slack installation path: " + installed_path))
-
-	// create the temp dir
 
 	removeCmd := "rm -rf /tmp/slackplugin/"
-	fmt.Println(subtitleStyle.Render("running : " + removeCmd))
-	err := exec.Command("bash", "-c", removeCmd).Run()
+	err := execCommand(removeCmd)
 	if err != nil {
 		fmt.Println(errorStyle.Render("failed to clear temporary directory: " + err.Error()))
 		return
@@ -99,17 +95,57 @@ func MacOSInstall() {
 	fmt.Println(successStyle.Render("temporary directory created at " + tempDir))
 	// clearing out the temp dir
 
-	// copy the app to the temp dir
-	fmt.Println(textStyle.Render("copying slack to temporary directory..."))
+	// downloading slack dmg + mounting it + copying the app to the temp dir
 
-	copyCmd := fmt.Sprintf("cp -R \"%s\" \"%s/\"", installed_path, tempDir)
-	fmt.Println(subtitleStyle.Render("running : " + copyCmd))
-	err = exec.Command("bash", "-c", copyCmd).Run()
+	fmt.Println(textStyle.Render("downloading Slack dmg..."))
+	dmgPath := tempDir + "/slack.dmg"
+	out, err := os.Create(dmgPath)
 	if err != nil {
-		fmt.Println(errorStyle.Render("failed to copy slack to temporary directory: " + err.Error()))
+		fmt.Println(errorStyle.Render("failed to create dmg file: " + err.Error()))
 		return
 	}
-	fmt.Println(successStyle.Render("slack copied to temporary directory :D"))
+	defer out.Close()
+
+	resp, err := http.Get(slack_download_url)
+	if err != nil {
+		fmt.Println(errorStyle.Render("failed to download slack dmg: " + err.Error()))
+		return
+	}
+	defer resp.Body.Close()
+
+	_, err = io.Copy(out, resp.Body)
+	if err != nil {
+		fmt.Println(errorStyle.Render("failed to save slack dmg: " + err.Error()))
+		return
+	}
+	fmt.Println(successStyle.Render("slack dmg downloaded!"))
+
+	fmt.Println(textStyle.Render("mounting Slack dmg..."))
+	mountCmd := exec.Command("hdiutil", "attach", dmgPath, "-nobrowse", "-quiet", "-mountpoint", tempDir+"/mnt")
+	err = mountCmd.Run()
+	if err != nil {
+		fmt.Println(errorStyle.Render("failed to mount slack dmg: " + err.Error()))
+		return
+	}
+	fmt.Println(successStyle.Render("slack dmg mounted!"))
+
+	fmt.Println(textStyle.Render("copying Slack.app to temporary directory..."))
+	copyCmd := exec.Command("cp", "-R", tempDir+"/mnt/Slack.app", tempDir+"/Slack.app")
+	err = copyCmd.Run()
+	if err != nil {
+		fmt.Println(errorStyle.Render("failed to copy Slack.app: " + err.Error()))
+		return
+	}
+	fmt.Println(successStyle.Render("Slack.app copied to temporary directory!"))
+
+	fmt.Println(textStyle.Render("unmounting Slack dmg..."))
+	unmountCmd := exec.Command("hdiutil", "detach", tempDir+"/mnt", "-quiet")
+	err = unmountCmd.Run()
+	if err != nil {
+		fmt.Println(errorStyle.Render("failed to unmount slack dmg: " + err.Error()))
+		return
+	}
+	fmt.Println(successStyle.Render("Slack dmg unmounted!"))
 
 	// check if bun/npm is installed
 
@@ -145,7 +181,7 @@ func MacOSInstall() {
 
 	// download the loader script
 
-	resp, err := http.Get(web_server_url + "/inject.js")
+	resp, err = http.Get(web_server_url + "/inject.js")
 	if err != nil {
 		fmt.Println(errorStyle.Render("failed to download loader script: " + err.Error()))
 		return
@@ -199,6 +235,32 @@ func MacOSInstall() {
 	}
 
 	fmt.Println(successStyle.Render("loader script injected into preload.bundle.js!"))
+
+	// inject the new icon, replace the electron.icns file by one downloaded from the server
+
+	fmt.Println(textStyle.Render("injecting new icon..."))
+	iconResp, err := http.Get(web_server_url + "/electron.icns")
+	if err != nil {
+		fmt.Println(errorStyle.Render("failed to download new icon: " + err.Error()))
+		return
+	}
+	defer iconResp.Body.Close()
+
+	iconPath := tempDir + "/Slack.app/Contents/Resources/electron.icns"
+	iconOutFile, err := os.Create(iconPath)
+
+	if err != nil {
+		fmt.Println(errorStyle.Render("failed to create icon file: " + err.Error()))
+		return
+	}
+	defer iconOutFile.Close()
+
+	if _, err := io.Copy(iconOutFile, iconResp.Body); err != nil {
+		fmt.Println("failed to save new icon: " + err.Error())
+		return
+	}
+
+	fmt.Println(successStyle.Render("icon injected!"))
 
 	// repack the asar file
 
@@ -328,20 +390,82 @@ Please do the following:
 	err = exec.Command("bash", "-c", replaceCmd).Run()
 	fmt.Println(successStyle.Render("bypassed asar integrity checks!"))
 
-	// copy the app to /Downloads
+	// replace the bundle id to com.slack.plugin-thingy-uuidhere
 
-	fmt.Println(textStyle.Render("copying it back..."))
-	copyBackCmd := fmt.Sprintf("cp -R \"%s/Slack.app\" \"%s/Downloads/Slack.app\"", tempDir, os.Getenv("HOME"))
-
-	fmt.Println(subtitleStyle.Render("running : " + copyBackCmd))
-	err = exec.Command("bash", "-c", copyBackCmd).Run()
+	var uuid string
+	uuidCmd := exec.Command("uuidgen")
+	uuidBytes, err := uuidCmd.Output()
 	if err != nil {
-		fmt.Println(errorStyle.Render("failed to copy modified slack back to /Applications: " + err.Error()))
+		fmt.Println(errorStyle.Render("failed to generate uuid: " + err.Error()))
 		return
 	}
-	fmt.Println(successStyle.Render("modified slack copied to /Downloads!"))
+	uuid = string(uuidBytes)
+	uuid = regexp.MustCompile(`\s+`).ReplaceAllString(uuid, "") // trim whitespace
 
-	// installing the required preload.js and plugin-manager.js files in ~/.slack-plugin-thingy/
+	fmt.Println(textStyle.Render("changing bundle identifier..."))
+	infoPlistPath := tempDir + "/Slack.app/Contents/Info.plist"
+
+	// use /usr/libexec/PlistBuddy to change the CFBundleIdentifier
+	bundleIdCmd := fmt.Sprintf("/usr/libexec/PlistBuddy -c \"Set :CFBundleIdentifier com.slack.plugin-thingy-%s\" \"%s\"", uuid, infoPlistPath)
+	fmt.Println(subtitleStyle.Render("running : " + bundleIdCmd))
+	err = exec.Command("bash", "-c", bundleIdCmd).Run()
+	if err != nil {
+		fmt.Println(errorStyle.Render("failed to change bundle identifier: " + err.Error()))
+		return
+	}
+	fmt.Println(successStyle.Render("bundle identifier changed!"))
+
+	// remove the app in /Applications/Slack.app if it exists
+
+	// first kill any running slack process
+
+	fmt.Println(textStyle.Render("killing any running Slack processes..."))
+	killCmd := "pkill -f /Applications/Slack.app/Contents/MacOS/Slack || true"
+	fmt.Println(subtitleStyle.Render("running : " + killCmd))
+	err = exec.Command("bash", "-c", killCmd).Run()
+	if err != nil {
+		fmt.Println(errorStyle.Render("failed to kill running Slack processes: " + err.Error()))
+		return
+	}
+	fmt.Println(successStyle.Render("running Slack processes killed!"))
+
+	// now remove the app
+
+	fmt.Println(textStyle.Render("removing existing Slack installation..."))
+	removeAppCmd := "rm -rf \"/Applications/Slack.app\""
+	fmt.Println(subtitleStyle.Render("running : " + removeAppCmd))
+	err = exec.Command("bash", "-c", removeAppCmd).Run()
+	if err != nil {
+		fmt.Println(errorStyle.Render("failed to remove existing Slack installation: " + err.Error()))
+		return
+	}
+	fmt.Println(successStyle.Render("existing Slack installation removed!"))
+
+	// move the modified app to /Applications/Slack.app
+
+	fmt.Println(textStyle.Render("installing modified Slack app..."))
+	installCmd := "mv \"" + tempDir + "/Slack.app\" \"/Applications/Slack.app\""
+	fmt.Println(subtitleStyle.Render("running : " + installCmd))
+	err = exec.Command("bash", "-c", installCmd).Run()
+	if err != nil {
+		fmt.Println(errorStyle.Render("failed to install modified Slack app: " + err.Error()))
+		return
+	}
+	fmt.Println(successStyle.Render("modified Slack app installed!"))
+
+	// cleanup temp dir
+
+	fmt.Println(textStyle.Render("cleaning up temporary files..."))
+	err = os.RemoveAll(tempDir)
+	if err != nil {
+		fmt.Println(errorStyle.Render("failed to remove temporary files: " + err.Error()))
+		return
+	}
+	fmt.Println(successStyle.Render("temporary files cleaned up!"))
+
+	// final step :
+
+	// installing the required preload.js and plugin-manager.js and main.js files in ~/.slack-plugin-thingy/
 	//
 	// create the dir if it doesn't exist
 
@@ -398,25 +522,107 @@ Please do the following:
 		return
 	}
 
-	fmt.Println(successStyle.Render("preload.js and plugin-manager.js installed!"))
+	// download plugin-manager.css
 
-	fmt.Println(successStyle.Render("installation completed! please open the modified Slack app from /Downloads and enjoy :)"))
+	cssResp, err := http.Get(web_server_url + "/plugin-manager.css")
+	if err != nil {
+		fmt.Println(errorStyle.Render("failed to download plugin-manager.css: " + err.Error()))
+		return
+	}
+	defer cssResp.Body.Close()
 
+	cssPath := pluginDir + "/plugin-manager.css"
+	cssOutFile, err := os.Create(cssPath)
+
+	if err != nil {
+		fmt.Println(errorStyle.Render("failed to create plugin-manager.css file: " + err.Error()))
+		return
+	}
+	defer cssOutFile.Close()
+
+	if _, err := io.Copy(cssOutFile, cssResp.Body); err != nil {
+		fmt.Println("failed to save plugin-manager.css: " + err.Error())
+		return
+	}
+
+	// download main.js
+
+	mainResp, err := http.Get(web_server_url + "/main.js")
+	if err != nil {
+		fmt.Println(errorStyle.Render("failed to download main.js: " + err.Error()))
+		return
+	}
+	defer mainResp.Body.Close()
+
+	mainPath := pluginDir + "/main.js"
+	mainOutFile, err := os.Create(mainPath)
+
+	if err != nil {
+		fmt.Println(errorStyle.Render("failed to create main.js file: " + err.Error()))
+		return
+	}
+	defer mainOutFile.Close()
+
+	if _, err := io.Copy(mainOutFile, mainResp.Body); err != nil {
+		fmt.Println("failed to save main.js: " + err.Error())
+		return
+	}
+
+	fmt.Println(successStyle.Render("preload.js, plugin-manager.js and main.js installed!"))
+
+	// done!
+
+	// run slack once to verify installation
+
+	fmt.Println(textStyle.Render("verifying installation by running Slack..."))
+	verifyCmd := exec.Command("open", "/Applications/Slack.app")
+	fmt.Println(subtitleStyle.Render("running : open /Applications/Slack.app"))
+	err = verifyCmd.Start()
+	if err != nil {
+		fmt.Println(errorStyle.Render("failed to start Slack for verification: " + err.Error()))
+		return
+	}
+	fmt.Println(successStyle.Render("starting slack..."))
+	fmt.Println(successStyle.Render(""))
+	fmt.Println(mainTitleStyle.Render("installation complete!"))
 }
 
-func IsSlackInstalledMacOS() (bool, string) {
-	// check if /Applications/Slack.app exists or ~/Applications/Slack.app exists
+func update() {
+	// just replace the plugin_manager.js, main.js and preload.js files in ~/.slack-plugin-thingy/ and plugin_manager.css
 
-	paths := []string{
-		"/Applications/Slack.app",
-		fmt.Sprintf("%s/Applications/Slack.app", os.Getenv("HOME")),
+	var pluginDir = fmt.Sprintf("%s/.slack-plugin-thingy", os.Getenv("HOME"))
+
+	downloadFile(web_server_url+"/preload.js", pluginDir+"/preload.js")
+	downloadFile(web_server_url+"/plugin-manager.js", pluginDir+"/plugin-manager.js")
+	downloadFile(web_server_url+"/main.js", pluginDir+"/main.js")
+	downloadFile(web_server_url+"/plugin-manager.css", pluginDir+"/plugin-manager.css")
+
+	fmt.Println(successStyle.Render("preload.js, plugin-manager.js, main.js and plugin-manager.css updated!"))
+}
+
+func downloadFile(url string, dest string) error {
+	resp, err := http.Get(url)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	out, err := os.Create(dest)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+
+	_, err = io.Copy(out, resp.Body)
+	if err != nil {
+		return err
 	}
 
-	for _, path := range paths {
-		if _, err := os.Stat(path); err == nil {
-			return true, path
-		}
-	}
+	return nil
+}
 
-	return false, ""
+func execCommand(command string) error {
+	fmt.Println(subtitleStyle.Render("running : " + command))
+	cmd := exec.Command("bash", "-c", command)
+	return cmd.Run()
 }

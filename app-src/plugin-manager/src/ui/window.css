@@ -1,0 +1,10 @@
+.mainContainer {
+    display: flex;
+    height: 100%;
+    flex-direction: column;
+    border-top: 1px solid rgba(var(--sk_foreground_low, 29, 28, 29), 0.13);
+}
+.mainModal {
+    margin-top: 69px;
+    margin-bottom: 28px;
+}
