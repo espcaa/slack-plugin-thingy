@@ -1,6 +1,6 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
-import App from "./ui/App";
+import App from "./ui/PluginManager";
 
 function mount() {
   if (document.getElementById("slackmod-react-root")) return;

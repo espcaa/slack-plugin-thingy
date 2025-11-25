@@ -1,0 +1,24 @@
+.plugin-list {
+    display: flex;
+    margin-top: 8px;
+    height: 100%;
+    flex-direction: column;
+    border-top: 1px solid rgba(var(--sk_foreground_low, 29, 28, 29), 0.13);
+}
+
+.plugin-item {
+    display: flex;
+    flex-direction: column;
+    padding: 12px 16px;
+    border-bottom: 1px solid rgba(var(--sk_foreground_low, 29, 28, 29), 0.08);
+    display: flex;
+    justify-content: space-between;
+    align-items: start;
+}
+
+.plugin-header {
+    display: flex;
+    justify-content: space-between;
+    flex-direction: row;
+    width: 100%;
+}

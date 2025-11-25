@@ -5,6 +5,7 @@ import type { Plugin } from "../../../types";
 import "../style.css";
 import Window from "./Window";
 import Card from "../../../components/Card";
+import TabButton from "../../../components/TabButton";
 
 function ToolbarButton({ onClick }: { onClick: () => void }) {
   const [toolbarNode, setToolbarNode] = useState<Element | null>(null);
@@ -59,6 +60,10 @@ export default function App() {
   const [open, setOpen] = useState(false);
   const [plugins, setPlugins] = useState<Plugin[]>([]);
 
+  const Tabs = ["plugins", "themes"];
+
+  const [focusedTab, setFocusedTab] = useState(Tabs[0]);
+
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Escape" && open) {
@@ -87,32 +92,20 @@ export default function App() {
         }}
       />
 
-      {open && (
-        <div
-          id="slackmod-overlay"
-          className="slackmod-overlay"
-          onClick={(e) => {
-            if (
-              e.target instanceof HTMLElement &&
-              e.target.id === "slackmod-overlay"
-            ) {
-              setOpen(false);
-            }
-          }}
-          style={{
-            position: "fixed",
-            top: 0,
-            left: 0,
-            width: "100%",
-            height: "100%",
-            background: "#0009",
-            zIndex: 10000,
-            display: "flex",
-            justifyContent: "center",
-            alignItems: "center",
-          }}
-          hidden={!open}
-        >
+      <div
+        id="slackmod-overlay"
+        className={`slackmod-overlay ${open ? "open" : ""}`}
+        onClick={(e) => {
+          if (
+            e.target instanceof HTMLElement &&
+            e.target.id === "slackmod-overlay"
+          ) {
+            setOpen(false);
+          }
+        }}
+        hidden={!open}
+      >
+        {open && (
           <Window title="slack-plugin-thingy" onClose={() => setOpen(false)}>
             <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
               <div
@@ -121,6 +114,7 @@ export default function App() {
                   flexDirection: "row",
                   gap: 8,
                   padding: 16,
+                  marginBottom: -16,
                 }}
               >
                 <Card width={180} height={250} backgroundColor="mojito" />
@@ -129,14 +123,43 @@ export default function App() {
                   style={{ display: "flex", flexDirection: "column", gap: 8 }}
                 >
                   <Card width={180} height={120} backgroundColor="aubergine" />
-                  <Card width={180} height={120} backgroundColor="aquarium" />
+                  <Card
+                    width={180}
+                    height={120}
+                    backgroundColor="aquarium"
+                    title="Reload slack </>"
+                    onClick={() => {
+                      window.location.reload();
+                    }}
+                  />
                 </div>
               </div>
-              <PluginList plugins={plugins} />
+              <div
+                style={{
+                  padding: 16,
+                }}
+              >
+                <div className="tabs_buttons">
+                  {Tabs.map((tab) => (
+                    <TabButton
+                      key={tab}
+                      label={tab.charAt(0).toUpperCase() + tab.slice(1)}
+                      active={focusedTab === tab}
+                      onClick={() => setFocusedTab(tab)}
+                    />
+                  ))}
+                </div>
+                <div className="tabs_content">
+                  {focusedTab === "plugins" && <PluginList plugins={plugins} />}
+                  {focusedTab === "themes" && (
+                    <div style={{ color: "#ababad" }}>No themes yet.</div>
+                  )}
+                </div>
+              </div>
             </div>
           </Window>
-        </div>
-      )}
+        )}
+      </div>
     </>
   );
 }

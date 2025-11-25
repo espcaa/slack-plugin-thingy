@@ -8,7 +8,7 @@ interface WindowProps {
 
 export default function Window({ children, title, onClose }: WindowProps) {
   return (
-    <div className="mainModal c-sk-modal c-sk-modal--fixed c-sk-modal--responsive p-prefs_dialog__modal p-prefs_dialog__modal--ia_layout">
+    <div className="mainModal c-sk-modal c-sk-modal--responsive p-prefs_dialog__modal--ia_layout">
       <div className="c-sk-modal_header">
         <div className="c-sk-modal_title_bar c-sk-modal_title_bar--pad_right p-prefs_dialog__title_bar">
           <div className="c-sk-modal_title_bar__text ">
@@ -38,7 +38,14 @@ export default function Window({ children, title, onClose }: WindowProps) {
           ></path>
         </svg>
       </button>
-      <div className="mainContainer">{children}</div>
+      <div
+        className="mainContainer"
+        style={{
+          marginBottom: 32,
+        }}
+      >
+        {children}
+      </div>
     </div>
   );
 }

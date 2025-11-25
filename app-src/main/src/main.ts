@@ -1,150 +1,238 @@
 import * as os from "os";
 import * as path from "path";
 import * as fs from "fs";
-import { app, ipcMain, IpcMainEvent, BrowserWindow } from "electron";
-import type { Plugin, Config } from "../../types";
+import { app, ipcMain } from "electron";
 
-const PLUGIN_BASE = path.join(os.homedir(), ".slack-plugin-thingy", "plugins");
-const BASE_PATH = path.join(os.homedir(), ".slack-plugin-thingy");
-const PRELOAD_PATH = path.join(
-  os.homedir(),
-  ".slack-plugin-thingy",
-  "preload.js",
-);
-const CONFIG_PATH = path.join(
-  os.homedir(),
-  ".slack-plugin-thingy",
-  "config.json",
-);
+const BASE = path.join(os.homedir(), ".slack-plugin-thingy");
+const PLUGINS = path.join(BASE, "plugins");
+const CONFIG = path.join(BASE, "config.json");
+const PRELOAD = path.join(BASE, "preload.js");
+const THEMES = path.join(BASE, "themes");
 
-// config file - ~/.slack-plugin-thingy/config.json
-
-const fetchConfig = (): Config => {
+const readConfig = () => {
   try {
-    if (fs.existsSync(CONFIG_PATH)) {
-      const raw = fs.readFileSync(CONFIG_PATH, "utf8");
-      const config = JSON.parse(raw) as Config;
-      return config;
+    if (fs.existsSync(CONFIG)) {
+      return JSON.parse(fs.readFileSync(CONFIG, "utf8"));
     }
-  } catch (e) {
-    console.error("Config Load Error", e);
-  }
-
-  return {
-    serverUrl: "",
-    pluginsEnabled: [],
-  };
+  } catch {}
+  return { serverUrl: "", pluginsEnabled: [], themesEnabled: [] };
 };
 
-ipcMain.on("SLACKMOD_GET_CONFIG", (event: IpcMainEvent) => {
-  const config = fetchConfig();
-  event.returnValue = config;
+const writeConfig = (cfg: any) => {
+  fs.mkdirSync(BASE, { recursive: true });
+  fs.writeFileSync(CONFIG, JSON.stringify(cfg, null, 2));
+};
+
+ipcMain.on("SLACKMOD_GET_CONFIG", (e) => {
+  e.returnValue = readConfig();
 });
 
-ipcMain.on("SLACKMOD_GET_PLUGINS", (event: IpcMainEvent) => {
+ipcMain.on("SLACKMOD_GET_PLUGINS", (e) => {
   try {
-    if (!fs.existsSync(PLUGIN_BASE)) {
-      event.returnValue = [];
+    if (!fs.existsSync(PLUGINS)) {
+      e.returnValue = [];
       return;
     }
+    const dirs = fs
+      .readdirSync(PLUGINS, { withFileTypes: true })
+      .filter((d) => d.isDirectory())
+      .map((d) => d.name);
 
-    const entries = fs.readdirSync(PLUGIN_BASE, { withFileTypes: true });
-    const folders = entries.filter((d) => d.isDirectory()).map((d) => d.name);
-
-    const plugins: Array<{ id: string; manifest: Record<string, unknown> }> =
-      [];
-    for (const folder of folders) {
-      const manifestPath = path.join(PLUGIN_BASE, folder, "manifest.json");
-      if (fs.existsSync(manifestPath)) {
+    const result = [];
+    for (const id of dirs) {
+      const m = path.join(PLUGINS, id, "manifest.json");
+      if (fs.existsSync(m)) {
         try {
-          const raw = fs.readFileSync(manifestPath, "utf8");
-          const manifest = JSON.parse(raw) as Record<string, unknown>;
-          plugins.push({ id: folder, manifest });
-        } catch (e) {
-          console.error("Manifest Error", e);
-        }
+          result.push({
+            id,
+            manifest: JSON.parse(fs.readFileSync(m, "utf8")),
+            enabled: false,
+          });
+        } catch {}
+      }
+    }
+    // set enabled : read config
+    const cfg = readConfig();
+    for (const p of result) {
+      p.enabled = !!cfg.pluginsEnabled.find((pl: any) => pl.id === p.id);
+    }
+    e.returnValue = result;
+  } catch {
+    e.returnValue = [];
+  }
+});
+
+// themes
+
+ipcMain.on("SLACKMOD_GET_THEMES", (e) => {
+  try {
+    if (!fs.existsSync(THEMES)) {
+      e.returnValue = [];
+      return;
+    }
+    const dirs = fs
+      .readdirSync(THEMES, { withFileTypes: true })
+      .filter((d) => d.isDirectory())
+      .map((d) => d.name);
+
+    const result = [];
+    for (const id of dirs) {
+      const m = path.join(THEMES, id, "manifest.json");
+      if (fs.existsSync(m)) {
+        try {
+          result.push({
+            id,
+            manifest: JSON.parse(fs.readFileSync(m, "utf8")),
+            enabled: false,
+          });
+        } catch {}
       }
     }
 
-    event.returnValue = plugins;
-  } catch (e) {
-    console.error("Plugin List Error", e);
-    event.returnValue = [];
+    // set enabled : read config
+    const cfg = readConfig();
+    for (const t of result) {
+      t.enabled = cfg.themesEnabled.includes(t.id);
+    }
+
+    e.returnValue = result;
+  } catch {
+    e.returnValue = [];
   }
 });
 
+app.once("browser-window-created", (ev, win) => {
+  const pre = win.webContents.session.getPreloads() || [];
+  if (!pre.includes(PRELOAD)) {
+    win.webContents.session.setPreloads([...pre, PRELOAD]);
+  }
+});
+
+// updating :D
+
+const FILES = [
+  "preload.js",
+  "main.js",
+  "plugin-manager.js",
+  "plugin-manager.css",
+];
+
+const updateFiles = async () => {
+  const cfg = readConfig();
+  for (const f of FILES) {
+    const url = cfg.serverUrl + "/" + f;
+    try {
+      const r = await fetch(url);
+      if (!r.ok) continue;
+      const txt = await r.text();
+      fs.writeFileSync(path.join(BASE, f), txt);
+    } catch {}
+  }
+};
+
+ipcMain.on("SLACKMOD_UPDATE_FILES", async (e) => {
+  await updateFiles();
+  e.returnValue = true;
+});
+
+// plugins/themes states
+
+ipcMain.on("SLACKMOD_SET_PLUGIN_ENABLED", (e, payload) => {
+  const cfg = readConfig();
+  if (!cfg.pluginsEnabled.find((p: any) => p.id === payload.pluginId)) {
+    cfg.pluginsEnabled.push({ id: payload.pluginId, manifest: {} });
+    writeConfig(cfg);
+  }
+  e.returnValue = true;
+});
+
 ipcMain.on(
-  "SLACKMOD_READ_FILE",
-  (event: IpcMainEvent, payload: { pluginId?: string; filePath: string }) => {
+  "SLACKMOD_GET_FILE",
+  (e, payload: { pluginId?: string; filePath: string }) => {
     try {
       const base = payload.pluginId
-        ? path.join(PLUGIN_BASE, payload.pluginId)
-        : path.join(os.homedir(), ".slack-plugin-thingy");
+        ? path.join(PLUGINS, payload.pluginId)
+        : BASE;
       const fullPath = path.join(base, payload.filePath);
 
       if (!fullPath.startsWith(base)) {
-        console.error("Blocked illegal path access:", fullPath);
-        event.returnValue = null;
+        e.returnValue = null;
         return;
       }
 
       if (fs.existsSync(fullPath)) {
-        const content = fs.readFileSync(fullPath, "utf8");
-        event.returnValue = content;
-      } else {
-        event.returnValue = null;
+        e.returnValue = fs.readFileSync(fullPath, "utf8");
+        return;
       }
-    } catch (e) {
-      console.error("Read File Error", e);
-      event.returnValue = null;
-    }
+    } catch {}
+    e.returnValue = null;
   },
 );
 
-app.once(
-  "browser-window-created",
-  (event: Electron.Event, win: BrowserWindow) => {
-    const preloads = win.webContents.session.getPreloads() ?? [];
-    if (!preloads.includes(PRELOAD_PATH)) {
-      win.webContents.session.setPreloads([...preloads, PRELOAD_PATH]);
-      console.log("[SlackMod] Injected custom preload");
-    }
-  },
-);
+ipcMain.on("SLACKMOD_SET_PLUGIN_DISABLED", (e, payload) => {
+  const cfg = readConfig();
+  cfg.pluginsEnabled = cfg.pluginsEnabled.filter(
+    (p: any) => p.id !== payload.pluginId,
+  );
+  writeConfig(cfg);
+  e.returnValue = true;
+});
 
-// updating :D
-
-const files_to_update = ["preload.js", "main.js", "plugin-manager.js"];
-
-const update = async () => {
-  // we need the config for the server url
-
-  const config = fetchConfig();
-
-  for (const file of files_to_update) {
-    const sourcePath = config.serverUrl + "/" + file;
-
-    try {
-      // fetch the file from sourcePath
-      const response = await fetch(sourcePath);
-      if (!response.ok) {
-        console.error(`Failed to fetch ${sourcePath}: ${response.statusText}`);
-        continue;
-      }
-
-      const data = await response.text();
-
-      let destPath = path.join(BASE_PATH, file);
-
-      fs.promises.writeFile(destPath, data, "utf8");
-      console.log(`[SlackMod] Updated ${file} successfully.`);
-    } catch (e) {
-      console.error(`Error updating ${file}:`, e);
-    }
+ipcMain.on("SLACKMOD_ENABLE_THEME", (e, themeId) => {
+  const cfg = readConfig();
+  if (!cfg.themesEnabled.includes(themeId)) {
+    cfg.themesEnabled.push(themeId);
+    writeConfig(cfg);
   }
-};
+  e.returnValue = true;
+});
 
-ipcMain.on("SLACKMOD_UPDATE_FILES", async (event: IpcMainEvent) => {
-  await update();
-  event.returnValue = true;
+ipcMain.on("SLACKMOD_DISABLE_THEME", (e, themeId) => {
+  const cfg = readConfig();
+  cfg.themesEnabled = cfg.themesEnabled.filter((t: any) => t !== themeId);
+  writeConfig(cfg);
+  e.returnValue = true;
+});
+
+// get a theme's css code
+
+ipcMain.on("SLACKMOD_GET_THEME_CSS", (e, themeId) => {
+  try {
+    const f = path.join(THEMES, themeId, "theme.css");
+    if (fs.existsSync(f)) {
+      e.returnValue = fs.readFileSync(f, "utf8");
+      return;
+    }
+  } catch {}
+  e.returnValue = null;
+});
+// get a plugin's code + if in the manifest, css
+
+ipcMain.on("SLACKMOD_GET_PLUGIN_CODE", (e, pluginId) => {
+  try {
+    const mPath = path.join(PLUGINS, pluginId, "manifest.json");
+    if (!fs.existsSync(mPath)) {
+      e.returnValue = { code: null, css: null };
+      return;
+    }
+    const manifest = JSON.parse(fs.readFileSync(mPath, "utf8"));
+    const entryFile = manifest.entry || "index.js";
+    const codePath = path.join(PLUGINS, pluginId, entryFile);
+    let code: string | null = null;
+    if (fs.existsSync(codePath)) {
+      code = fs.readFileSync(codePath, "utf8");
+    }
+
+    let css: string | null = null;
+    if (manifest.css) {
+      const cssPath = path.join(PLUGINS, pluginId, manifest.css);
+      if (fs.existsSync(cssPath)) {
+        css = fs.readFileSync(cssPath, "utf8");
+      }
+    }
+
+    e.returnValue = { code, css };
+    return;
+  } catch {}
+  e.returnValue = { code: null, css: null };
 });

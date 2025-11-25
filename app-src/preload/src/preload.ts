@@ -1,111 +1,151 @@
-import { contextBridge, ipcRenderer, IpcRendererEvent } from "electron";
+import { contextBridge, ipcRenderer } from "electron";
 
 interface PluginManifest {
   entry?: string;
+  css?: string | string[];
   [key: string]: any;
 }
 
 interface Plugin {
   id: string;
   manifest: PluginManifest;
+  enabled: boolean;
 }
 
-const getPluginList = (): Plugin[] => {
-  return ipcRenderer.sendSync("SLACKMOD_GET_PLUGINS");
+interface ThemeManifest {
+  name: string;
+  description?: string;
+  [key: string]: any;
+}
+
+interface Theme {
+  id: string;
+  manifest: ThemeManifest;
+  enabled: boolean;
+}
+
+interface LoadedPlugin {
+  id: string;
+  manifest: PluginManifest;
+}
+
+const ipcSync = <T>(channel: string, payload?: any): T =>
+  ipcRenderer.sendSync(channel, payload);
+
+const getPluginList = (): Plugin[] => ipcSync<Plugin[]>("SLACKMOD_GET_PLUGINS");
+
+const getTHemesList = (): Theme[] => ipcSync<Theme[]>("SLACKMOD_GET_THEMES");
+
+interface PluginCode {
+  code: string | null;
+  css: string | null;
+}
+
+const getFile = (pluginId: string | null, filePath: string): string | null => {
+  return ipcRenderer.sendSync("SLACKMOD_GET_FILE", { pluginId, filePath });
 };
 
-const getPluginFile = (
-  pluginId: string | null,
-  filePath: string,
-): string | null => {
-  return ipcRenderer.sendSync("SLACKMOD_READ_FILE", { pluginId, filePath });
+const getPluginFile = (pluginId: string | null): PluginCode => {
+  if (!pluginId) return { code: null, css: null };
+  return ipcRenderer.sendSync("SLACKMOD_GET_PLUGIN_CODE", pluginId);
+};
+
+const getThemeFile = (themeId: string): string | null => {
+  return ipcRenderer.sendSync("SLACKMOD_GET_THEME_CSS", themeId);
+};
+
+const injectJS = (code: string, id: string) => {
+  const blob = new Blob([code], { type: "text/javascript" });
+  const url = URL.createObjectURL(blob);
+  const script = document.createElement("script");
+  script.src = url;
+  script.onload = () => {
+    try {
+      URL.revokeObjectURL(url);
+    } catch {}
+    script.removeAttribute("src");
+  };
+  script.setAttribute("data-slackmod", id);
+  (document.head || document.documentElement).appendChild(script);
+};
+
+const injectCSS = (code: string, id: string) => {
+  const style = document.createElement("style");
+  style.setAttribute("data-slackmod", id);
+  style.textContent = code;
+  document.head.appendChild(style);
+};
+
+const loadPlugin = (plugin: Plugin): LoadedPlugin | null => {
+  const code = getPluginFile(plugin.id);
+  if (!code) return null;
+
+  // try to inject css first
+
+  if (code.css) {
+    injectCSS(code.css, `plugin-${plugin.id}-style`);
+  }
+
+  // then inject js
+
+  if (code.code) {
+    injectJS(code.code, `plugin-${plugin.id}`);
+  }
+
+  return {
+    id: plugin.id,
+    manifest: plugin.manifest,
+  };
+};
+
+const loadTheme = (themeId: string) => {
+  const css = getThemeFile(themeId);
+  if (css) {
+    injectCSS(css, `theme-${themeId}-style`);
+  }
 };
 
 contextBridge.exposeInMainWorld("slackmod_custom", {
   getPluginList,
   getPluginFile,
+  enablePlugin: (pluginId: string) =>
+    ipcSync<boolean>("SLACKMOD_ENABLE_PLUGIN", pluginId),
+  disablePlugin: (pluginId: string) =>
+    ipcSync<boolean>("SLACKMOD_DISABLE_PLUGIN", pluginId),
+  getThemeList: getTHemesList,
+  enableTheme: (themeId: string) =>
+    ipcSync<boolean>("SLACKMOD_ENABLE_THEME", themeId),
+  disableTheme: (themeId: string) =>
+    ipcSync<boolean>("SLACKMOD_DISABLE_THEME", themeId),
 });
 
 window.addEventListener("DOMContentLoaded", () => {
-  console.log("[SlackMod] Preload loaded. Initializing plugins...");
+  const guiJS = getFile(null, "plugin-manager.js");
+  if (guiJS) injectJS(guiJS, "plugin-manager");
 
-  const guiCode = getPluginFile(null, "plugin-manager.js");
-  if (guiCode) {
-    try {
-      const blob = new Blob([guiCode], { type: "text/javascript" });
-      const url = URL.createObjectURL(blob);
-      const script = document.createElement("script");
-      script.src = url;
-      script.onload = () => {
-        try {
-          URL.revokeObjectURL(url);
-        } catch {}
-        script.removeAttribute("src");
-      };
-      script.setAttribute("data-slackmod", "plugin-manager");
-      (document.head || document.documentElement).appendChild(script);
-    } catch (e) {
-      console.error("GUI Init Error", e);
-    }
-  }
-
-  const cssCode = getPluginFile(null, "plugin-manager.css");
-  if (cssCode) {
-    try {
-      const style = document.createElement("style");
-      style.setAttribute("data-slackmod", "plugin-manager-style");
-      style.textContent = cssCode;
-      document.head.appendChild(style);
-    } catch (e) {
-      console.error("CSS Init Error", e);
-    }
-  }
+  const guiCSS = getFile(null, "plugin-manager.css");
+  if (guiCSS) injectCSS(guiCSS, "plugin-manager-style");
 
   const plugins = getPluginList();
+  const themes = getTHemesList();
+
+  console.log(`[SlackMod] Found ${themes.length} themes.`);
+
+  themes.forEach((theme) => {
+    if (theme.enabled) {
+      loadTheme(theme.id);
+    }
+  });
   console.log(`[SlackMod] Found ${plugins.length} plugins.`);
 
   plugins.forEach((plugin) => {
-    const entryFile = plugin.manifest.entry || "index.js";
-    const code = getPluginFile(plugin.id, entryFile);
-    if (!code) return;
-
-    const module: { exports: any } = { exports: {} };
-
-    const localRequire = (relPath: string): any => {
-      const fileCode = getPluginFile(plugin.id, relPath);
-      if (!fileCode) {
-        console.error(
-          `Cannot find module '${relPath}' in plugin '${plugin.id}'`,
-        );
-        return null;
+    if (plugin.enabled) {
+      const loaded = loadPlugin(plugin);
+      if (loaded) {
+        console.log(`[SlackMod] Loaded plugin: ${loaded.id}`);
+      } else {
+        console.log(`[SlackMod] Failed to load plugin: ${plugin.id}`);
       }
-
-      const mod: { exports: any } = { exports: {} };
-      try {
-        new Function("require", "module", "exports", fileCode)(
-          localRequire,
-          mod,
-          mod.exports,
-        );
-      } catch (err) {
-        console.error(`Error requiring ${relPath}:`, err);
-      }
-      return mod.exports;
-    };
-
-    try {
-      new Function("require", "module", "exports", code)(
-        localRequire,
-        module,
-        module.exports,
-      );
-
-      if (module.exports && typeof module.exports.onStart === "function") {
-        module.exports.onStart();
-      }
-      console.log(`[SlackMod] Loaded: ${plugin.id}`);
-    } catch (err) {
-      console.error(`[SlackMod] Failed to load ${plugin.id}:`, err);
     }
   });
 });

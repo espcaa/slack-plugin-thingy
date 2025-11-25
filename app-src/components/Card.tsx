@@ -4,6 +4,7 @@ interface cardProps {
   backgroundColor?: keyof typeof colorsDict;
   width?: number;
   height?: number;
+  onClick?: () => void;
 }
 
 const colorsDict = {
@@ -15,10 +16,11 @@ const colorsDict = {
 
 export default function Card({
   title,
-  imageSrc,
+  imageSrc = "",
   backgroundColor,
   width,
   height,
+  onClick,
 }: cardProps) {
   return (
     <button
@@ -36,6 +38,7 @@ export default function Card({
       data-qa="action_card_invite"
       aria-label={title || "Card Title"}
       type="button"
+      onClick={onClick}
       // style="--width: 180;"
     >
       <div className="header__xDYH3">
@@ -52,13 +55,9 @@ export default function Card({
         </p>
         <p className="description__NZYOf"></p>
       </div>
-      <img
-        className="image__bzQGQinviteImage__jImW1"
-        src={
-          imageSrc ||
-          "https://a.slack-edge.com/80588/marketing/img/landing_pages/workspace-templates/invite-people.png"
-        }
-      ></img>
+      {imageSrc != "" && (
+        <img className="image__bzQGQinviteImage__jImW1" src={imageSrc}></img>
+      )}
     </button>
   );
 }
